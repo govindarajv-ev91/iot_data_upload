@@ -67,3 +67,79 @@ export async function fetchUnmatchedIotRows(limit = 100) {
   if (error) throw error
   return data || []
 }
+
+/** Latest data date per source with vehicle count and upload file count for that date. */
+export async function fetchLastUploadBySource(sourceKeys) {
+  const supabase = getSupabase()
+  const keys = sourceKeys || []
+
+  const entries = await Promise.all(
+    keys.map(async (dataSource) => {
+      const { data: latestRows, error: latestError } = await supabase
+        .from(IOT_DATA_TABLE)
+        .select('run_date')
+        .eq('data_source', dataSource)
+        .order('run_date', { ascending: false })
+        .limit(1)
+
+      if (latestError) throw latestError
+      const latestRunDate = latestRows?.[0]?.run_date
+      if (!latestRunDate) return [dataSource, null]
+
+      const { data: rowsForDate, error: rowsError } = await supabase
+        .from(IOT_DATA_TABLE)
+        .select('created_at, vehicle_number, raw_vehicle_id')
+        .eq('data_source', dataSource)
+        .eq('run_date', latestRunDate)
+
+      if (rowsError) throw rowsError
+
+      const list = rowsForDate || []
+      const vehicleKeys = new Set(
+        list.map((row) => (row.vehicle_number || row.raw_vehicle_id || '').trim()).filter(Boolean),
+      )
+      const fileCount = new Set(list.map((row) => row.created_at).filter(Boolean)).size
+      const latestUpload = list.reduce((max, row) => {
+        if (!row.created_at) return max
+        return !max || row.created_at > max ? row.created_at : max
+      }, null)
+
+      return [
+        dataSource,
+        {
+          runDate: latestRunDate,
+          createdAt: latestUpload,
+          vehicleCount: vehicleKeys.size,
+          fileCount,
+        },
+      ]
+    }),
+  )
+
+  return Object.fromEntries(entries)
+}
+
+/** Returns run_dates that already have data for this source (with last upload time). */
+export async function findExistingUploadsForDates(dataSource, runDates) {
+  const supabase = getSupabase()
+  const uniqueDates = [...new Set((runDates || []).filter(Boolean))]
+  if (!uniqueDates.length) return []
+
+  const { data, error } = await supabase
+    .from(IOT_DATA_TABLE)
+    .select('run_date, created_at')
+    .eq('data_source', dataSource)
+    .in('run_date', uniqueDates)
+    .order('created_at', { ascending: false })
+
+  if (error) throw error
+
+  const byDate = new Map()
+  for (const row of data || []) {
+    if (!byDate.has(row.run_date)) {
+      byDate.set(row.run_date, row.created_at)
+    }
+  }
+
+  return [...byDate.entries()].map(([runDate, uploadedAt]) => ({ runDate, uploadedAt }))
+}

@@ -15,6 +15,7 @@ export const IOT_DATA_SOURCES = {
     date: ['date'],
     distance: ['total_distance'],
     secondary: [],
+    multiFilePerDate: true,
   },
   alt_mobility: {
     label: 'Alt Mobility',
@@ -23,20 +24,57 @@ export const IOT_DATA_SOURCES = {
     distance: ['total_distance'],
     secondary: [],
   },
-  connectm_motovolt: {
-    label: 'Connectm - Motovolt',
-    vehicle: ['reg_no'],
-    date: ['report_date'],
-    distance: ['distance'],
-    secondary: ['vin', 'vcu_id'],
-  },
-  stridegreen: {
-    label: 'Stridegreen',
+  vehicle_day_report: {
+    label: 'Recent_Details (stridegreen)',
     vehicle: ['vehicle_no'],
     date: ['date'],
     distance: ['distance_km'],
     secondary: ['chassis_no'],
   },
+  Recent_Details: {
+    label: 'vehicle_day_report (Motvolt)',
+    vehicle: ['reg_no'],
+    date: ['report_date'],
+    distance: ['distance'],
+    secondary: ['vin', 'vcu_id'],
+  },
+}
+
+function readCellValue(cell) {
+  if (!cell) return ''
+  // Prefer Excel formatted text for date cells — avoids UTC timezone shifting the day
+  if (cell.t === 'd' && cell.w != null && String(cell.w).trim() !== '') return cell.w
+  if (cell.v instanceof Date) return cell.v
+  if (cell.t === 'n' && typeof cell.v === 'number') return cell.v
+  if (cell.w != null && String(cell.w).trim() !== '') return cell.w
+  if (cell.v != null && String(cell.v).trim() !== '') return cell.v
+  return ''
+}
+
+function buildRowsFromSheet(sheet, sourceKey) {
+  const ref = sheet['!ref']
+  if (!ref) return []
+
+  const range = XLSX.utils.decode_range(ref)
+  const headers = []
+  for (let c = range.s.c; c <= range.e.c; c++) {
+    const addr = XLSX.utils.encode_cell({ r: range.s.r, c })
+    headers[c] = String(readCellValue(sheet[addr])).replace(/^\uFEFF/, '').trim()
+  }
+
+  const rows = []
+  for (let r = range.s.r + 1; r <= range.e.r; r++) {
+    const row = {}
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const header = headers[c]
+      if (!header) continue
+      const addr = XLSX.utils.encode_cell({ r, c })
+      row[header] = readCellValue(sheet[addr])
+    }
+    rows.push(row)
+  }
+
+  return parseIotWorkbookRows(rows, sourceKey)
 }
 
 function mapIotRow(normalized, sourceKey) {
@@ -82,8 +120,7 @@ export function parseIotWorkbookArrayBuffer(arrayBuffer, sourceKey) {
   if (!sheetName) return { rows: [], sheetName: null }
 
   const sheet = workbook.Sheets[sheetName]
-  const json = XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false })
-  const rows = parseIotWorkbookRows(json, sourceKey)
+  const rows = buildRowsFromSheet(sheet, sourceKey)
 
   return { rows, sheetName }
 }
@@ -96,8 +133,8 @@ export function detectIotDataSource(headers) {
 
   if (has('object') && has('total_distance') && has('date')) return 'opspod_ev91'
   if (has('reg_no') && has('total_distance_date')) return 'alt_mobility'
-  if (has('reg_no') && has('report_date') && has('distance')) return 'connectm_motovolt'
-  if (has('vehicle_no') && has('distance_km')) return 'stridegreen'
+  if (has('reg_no') && has('report_date') && has('distance') && has('vin')) return 'Recent_Details'
+  if (has('vehicle_no') && has('distance_km') && has('s_no')) return 'vehicle_day_report'
 
   return null
 }
@@ -113,4 +150,8 @@ export function toIotDbRows(parsedRows) {
     lookup_matched: row.lookup_matched ?? false,
     lookup_match_type: row.lookup_match_type ?? null,
   }))
+}
+
+export function allowsMultiFilePerDate(sourceKey) {
+  return Boolean(IOT_DATA_SOURCES[sourceKey]?.multiFilePerDate)
 }

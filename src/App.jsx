@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { format } from 'date-fns'
 import {
   Activity,
   AlertCircle,
@@ -6,53 +7,47 @@ import {
   CheckCircle2,
   Database,
   FileSpreadsheet,
-  Leaf,
+  Car,
+  ClipboardList,
+  Download,
   Loader2,
   Radio,
   Upload,
-  Zap,
 } from 'lucide-react'
-import { IOT_DATA_SOURCES, parseIotWorkbookArrayBuffer, toIotDbRows } from './lib/iotDataParse.js'
+import { IOT_DATA_SOURCES, parseIotWorkbookArrayBuffer, toIotDbRows, allowsMultiFilePerDate } from './lib/iotDataParse.js'
 import { attachVehicleLookup } from './lib/vehicleLookup.js'
 import { fetchAllVehicleMaster } from './lib/vehicleMasterDb.js'
 import {
   fetchIotDataPreview,
+  findExistingUploadsForDates,
+  fetchLastUploadBySource,
   fetchUnmatchedIotRows,
   getIotDataDbSetupMessage,
   isMissingIotDataTable,
   saveIotDataRows,
 } from './lib/iotDataDb.js'
 import { isSupabaseConfigured, supabaseConfigError } from './lib/supabaseClient.js'
+import { getTemplateUrl, IOT_SOURCE_TEMPLATES, isRequiredHeader } from './lib/sourceTemplates.js'
 
 const SOURCE_META = {
-  opspod_ev91: {
-    icon: Radio,
-    color: '#38bdf8',
-    vehicleCol: 'Object',
-    dateCol: 'Date',
-    distanceCol: 'Total Distance',
-  },
-  alt_mobility: {
-    icon: Bike,
-    color: '#a855f7',
-    vehicleCol: 'reg_no',
-    dateCol: 'Total Distance Date',
-    distanceCol: 'total_distance',
-  },
-  connectm_motovolt: {
-    icon: Zap,
-    color: '#fbbf24',
-    vehicleCol: 'Reg No',
-    dateCol: 'Report Date',
-    distanceCol: 'Distance',
-  },
-  stridegreen: {
-    icon: Leaf,
-    color: '#4ade80',
-    vehicleCol: 'Vehicle No',
-    dateCol: 'Date',
-    distanceCol: 'Distance (km)',
-  },
+  opspod_ev91: { icon: Radio, color: '#38bdf8' },
+  alt_mobility: { icon: Bike, color: '#a855f7' },
+  vehicle_day_report: { icon: Car, color: '#2dd4bf' },
+  Recent_Details: { icon: ClipboardList, color: '#f472b6' },
+}
+
+function formatLastUpload(value) {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  return format(date, 'dd MMM yyyy, hh:mm a')
+}
+
+function formatDataDate(value) {
+  if (!value) return 'No data yet'
+  const date = new Date(`${value}T00:00:00`)
+  if (Number.isNaN(date.getTime())) return value
+  return format(date, 'dd MMM yyyy')
 }
 
 function Alert({ type, children }) {
@@ -73,21 +68,29 @@ export default function App() {
   const [lastResult, setLastResult] = useState(null)
   const [preview, setPreview] = useState([])
   const [unmatched, setUnmatched] = useState([])
+  const [lastUploadBySource, setLastUploadBySource] = useState({})
   const [dbReady, setDbReady] = useState(true)
   const fileRef = useRef(null)
 
   const refreshDashboard = useCallback(async () => {
     if (!isSupabaseConfigured) return
     try {
-      const [rows, badRows] = await Promise.all([fetchIotDataPreview(12), fetchUnmatchedIotRows(8)])
+      const sourceKeys = Object.keys(IOT_DATA_SOURCES)
+      const [rows, badRows, lastUploads] = await Promise.all([
+        fetchIotDataPreview(12),
+        fetchUnmatchedIotRows(8),
+        fetchLastUploadBySource(sourceKeys),
+      ])
       setPreview(rows)
       setUnmatched(badRows)
+      setLastUploadBySource(lastUploads)
       setDbReady(true)
     } catch (err) {
       if (isMissingIotDataTable(err)) {
         setDbReady(false)
         setPreview([])
         setUnmatched([])
+        setLastUploadBySource({})
       }
     }
   }, [])
@@ -111,6 +114,24 @@ export default function App() {
         return
       }
 
+      const runDates = [...new Set(parsed.map((row) => row.run_date))]
+      const multiFilePerDate = allowsMultiFilePerDate(sourceKey)
+
+      if (!multiFilePerDate) {
+        const conflicts = await findExistingUploadsForDates(sourceKey, runDates)
+        if (conflicts.length) {
+          const sourceLabel = IOT_DATA_SOURCES[sourceKey].label
+          const detail = conflicts
+            .map((c) => `${c.runDate} (uploaded ${formatLastUpload(c.uploadedAt)})`)
+            .join(', ')
+          setMessage({
+            type: 'error',
+            text: `Upload blocked — ${sourceLabel} data for this date already exists: ${detail}. Same data will not be uploaded again.`,
+          })
+          return
+        }
+      }
+
       const masterRows = await fetchAllVehicleMaster()
       const withLookup = attachVehicleLookup(parsed, masterRows)
       const dbRows = toIotDbRows(withLookup)
@@ -120,10 +141,14 @@ export default function App() {
       const { inserted, skipped } = await saveIotDataRows(dbRows)
       const result = { total: withLookup.length, matched, unmatched: unmatchedCount, inserted, skipped, fileName: file.name }
       setLastResult(result)
-      setMessage({
-        type: 'success',
-        text: `Uploaded ${file.name} — ${inserted.toLocaleString()} rows saved to iot_data.`,
-      })
+
+      let successText = `Uploaded ${file.name} — ${inserted.toLocaleString()} rows saved to iot_data.`
+      if (multiFilePerDate && skipped > 0) {
+        successText += ` ${skipped.toLocaleString()} skipped (same vehicle + date already exists).`
+      } else if (skipped > 0) {
+        successText += ` ${skipped.toLocaleString()} duplicate rows skipped.`
+      }
+      setMessage({ type: 'success', text: successText })
       await refreshDashboard()
     } catch (err) {
       if (isMissingIotDataTable(err)) {
@@ -151,6 +176,7 @@ export default function App() {
   }
 
   const meta = SOURCE_META[sourceKey]
+  const template = IOT_SOURCE_TEMPLATES[sourceKey]
   const SourceIcon = meta.icon
   const matchRate = lastResult
     ? Math.round((lastResult.matched / lastResult.total) * 100)
@@ -162,8 +188,8 @@ export default function App() {
         <div>
           <h1>IoT Data Upload</h1>
           <p>
-            Upload day-wise vehicle running data from Opspod, Alt Mobility, Connectm, or Stridegreen.
-            Vehicle numbers are resolved against vehicle_master before saving.
+            Upload day-wise vehicle running data from Opspod, Alt Mobility,
+            vehicle_day_report, or Recent_Details. Vehicle numbers are resolved against vehicle_master before saving.
           </p>
         </div>
         <span className="badge">
@@ -207,8 +233,11 @@ export default function App() {
           <div className="source-grid">
             {Object.entries(IOT_DATA_SOURCES).map(([key, cfg]) => {
               const m = SOURCE_META[key]
+              const tpl = IOT_SOURCE_TEMPLATES[key]
               const Icon = m.icon
               const active = sourceKey === key
+              const lastUpload = lastUploadBySource[key]
+              const req = tpl?.requiredFields
               return (
                 <button
                   key={key}
@@ -223,15 +252,70 @@ export default function App() {
                     </div>
                     <h3>{cfg.label}</h3>
                   </div>
-                  <p>
-                    {m.vehicleCol} · {m.dateCol} · {m.distanceCol}
+                  {req && (
+                    <p className="source-required-cols">
+                      <span className="req-tag">V</span> {req.vehicle}
+                      <span className="req-sep">·</span>
+                      <span className="req-tag">Date</span> {req.date}
+                      <span className="req-sep">·</span>
+                      <span className="req-tag">Km</span> {req.distance}
+                    </p>
+                  )}
+                  <p className="source-last-upload">
+                    Last data date: <strong>{formatDataDate(lastUpload?.runDate)}</strong>
                   </p>
+                  {lastUpload?.vehicleCount != null && lastUpload.vehicleCount > 0 && (
+                    <p className="source-upload-time">
+                      Vehicles: <strong>{lastUpload.vehicleCount.toLocaleString()}</strong>
+                      {lastUpload.fileCount > 0 && (
+                        <>
+                          {' '}
+                          · Files: <strong>{lastUpload.fileCount.toLocaleString()}</strong>
+                        </>
+                      )}
+                    </p>
+                  )}
+                  {lastUpload?.createdAt && key !== 'opspod_ev91' && (
+                    <p className="source-upload-time">
+                      File uploaded: {formatLastUpload(lastUpload.createdAt)}
+                    </p>
+                  )}
                 </button>
               )
             })}
           </div>
 
           <h2 className="panel-title">2. Upload file</h2>
+
+          {template && (
+            <div className="template-bar">
+              <div className="template-bar-text">
+                <FileSpreadsheet size={16} />
+                <span>
+                  Use exact column headers from the template. Required:{' '}
+                  <strong>{template.requiredFields.vehicle}</strong>,{' '}
+                  <strong>{template.requiredFields.date}</strong>,{' '}
+                  <strong>{template.requiredFields.distance}</strong>
+                  {allowsMultiFilePerDate(sourceKey) && (
+                    <>
+                      . Multiple files per day allowed — duplicates checked by{' '}
+                      <strong>vehicle + date</strong>, not date alone.
+                    </>
+                  )}
+                </span>
+              </div>
+              <a
+                className="template-download-btn"
+                href={getTemplateUrl(sourceKey)}
+                download={template.templateFile}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <Download size={15} />
+                Download template
+              </a>
+            </div>
+          )}
+
           <div
             className={`dropzone${dragging ? ' dragging' : ''}${uploading ? ' disabled' : ''}`}
             onClick={() => !uploading && fileRef.current?.click()}
@@ -300,31 +384,57 @@ export default function App() {
 
         <aside className="glass panel">
           <h2 className="panel-title">Column mapping</h2>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', marginBottom: '1rem' }}>
+          <div className="source-panel-head">
             <div className="source-icon" style={{ background: `${meta.color}22`, color: meta.color }}>
               <SourceIcon size={18} />
             </div>
             <div>
               <div style={{ fontWeight: 600 }}>{IOT_DATA_SOURCES[sourceKey].label}</div>
-              <div style={{ fontSize: '0.78rem', color: 'var(--text-dim)' }}>Maps to iot_data table</div>
+              <div className="source-panel-sub">Maps to iot_data table</div>
             </div>
           </div>
           <ul className="mapping-list">
             <li>
               <span className="key">V Number</span>
-              <span className="val">{meta.vehicleCol}</span>
+              <span className="val">{template?.requiredFields.vehicle}</span>
             </li>
             <li>
               <span className="key">Date</span>
-              <span className="val">{meta.dateCol}</span>
+              <span className="val">{template?.requiredFields.date}</span>
             </li>
             <li>
               <span className="key">Distance</span>
-              <span className="val">{meta.distanceCol}</span>
+              <span className="val">{template?.requiredFields.distance}</span>
             </li>
           </ul>
 
-          <h2 className="panel-title" style={{ marginTop: '1.5rem' }}>Lookup rules</h2>
+          {template && (
+            <>
+              <h2 className="panel-title panel-title-spaced">File column headers</h2>
+              <p className="header-hint">Highlighted columns are required for upload.</p>
+              <div className="header-chips">
+                {template.headers.map((header) => (
+                  <span
+                    key={header}
+                    className={`header-chip${isRequiredHeader(sourceKey, header) ? ' required' : ''}`}
+                    title={isRequiredHeader(sourceKey, header) ? 'Required column' : 'Optional column'}
+                  >
+                    {header}
+                  </span>
+                ))}
+              </div>
+              <a
+                className="template-download-btn template-download-block"
+                href={getTemplateUrl(sourceKey)}
+                download={template.templateFile}
+              >
+                <Download size={15} />
+                Download {template.label} template (.csv)
+              </a>
+            </>
+          )}
+
+          <h2 className="panel-title panel-title-spaced">Lookup rules</h2>
           <ul className="mapping-list">
             <li>
               <span className="key">vehicle_number</span>

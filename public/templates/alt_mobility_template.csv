@@ -1,0 +1,2 @@
+vehicle_id,reg_no,manufacturer_name,model_name,customer_name,tranche,city,connectivity_status,substatus,asset_type,asset_category,vehicle_category,total_distance,extra_km_charge_per_km,permitted_monthly_km,average_km_per_soc,average_wh_per_km,Total Distance Date
+V001,TN22EB2091,OEM,Model X,Customer,T1,Chennai,Connected,Active,EV,2W,Bike,52,0,3000,1.2,28,2026-06-18

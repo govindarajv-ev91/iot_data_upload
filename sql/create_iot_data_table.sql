@@ -1,4 +1,4 @@
--- Day-wise IoT running data (unified from Opspod, Alt Mobility, Connectm, Stridegreen).
+-- Day-wise IoT running data (unified from multiple vendor upload formats).
 -- Safe to re-run: uses IF NOT EXISTS / DROP POLICY IF EXISTS
 
 create table if not exists public.iot_data (
