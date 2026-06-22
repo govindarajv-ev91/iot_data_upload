@@ -134,11 +134,12 @@ export default function App() {
 
       const masterRows = await fetchAllVehicleMaster()
       const withLookup = attachVehicleLookup(parsed, masterRows)
-      const dbRows = toIotDbRows(withLookup)
+      const uploadBatchId = crypto.randomUUID()
+      const dbRows = toIotDbRows(withLookup, uploadBatchId)
       const matched = withLookup.filter((r) => r.lookup_matched).length
       const unmatchedCount = withLookup.length - matched
 
-      const { inserted, skipped } = await saveIotDataRows(dbRows)
+      const { inserted, skipped } = await saveIotDataRows(dbRows, { dedupeByVehicleDate: multiFilePerDate })
       const result = { total: withLookup.length, matched, unmatched: unmatchedCount, inserted, skipped, fileName: file.name }
       setLastResult(result)
 

@@ -1,4 +1,5 @@
 import { getSupabase } from './supabaseClient.js'
+import { vehicleMatchKey } from './uploadParseUtils.js'
 
 export const IOT_DATA_TABLE = 'iot_data'
 
@@ -11,35 +12,64 @@ export function getIotDataDbSetupMessage() {
   return 'Database table missing. Run sql/create_iot_data_table.sql in Supabase SQL Editor, then upload again.'
 }
 
-export async function saveIotDataRows(rows, { replaceSourceDate = null } = {}) {
+/** Normalized key for vehicle + date duplicate checks (ignores case/spaces/hyphens). */
+export function iotRowDedupeKey(row) {
+  const vehicle = vehicleMatchKey(row.vehicle_number || row.raw_vehicle_id || '')
+  return `${row.data_source}|${row.run_date}|${vehicle}`
+}
+
+export async function fetchExistingDedupeKeys(dataSource, runDates) {
+  const supabase = getSupabase()
+  const dates = [...new Set((runDates || []).filter(Boolean))]
+  if (!dates.length) return new Set()
+
+  const { data, error } = await supabase
+    .from(IOT_DATA_TABLE)
+    .select('data_source, run_date, vehicle_number, raw_vehicle_id')
+    .eq('data_source', dataSource)
+    .in('run_date', dates)
+
+  if (error) throw error
+  return new Set((data || []).map(iotRowDedupeKey))
+}
+
+export async function saveIotDataRows(rows, { dedupeByVehicleDate = false } = {}) {
   if (!rows?.length) return { inserted: 0, skipped: 0 }
 
   const supabase = getSupabase()
-
-  if (replaceSourceDate?.data_source && replaceSourceDate?.run_date) {
-    const { error: delError } = await supabase
-      .from(IOT_DATA_TABLE)
-      .delete()
-      .eq('data_source', replaceSourceDate.data_source)
-      .eq('run_date', replaceSourceDate.run_date)
-    if (delError) throw delError
-  }
-
-  const chunkSize = 500
-  let inserted = 0
+  let toInsert = rows
   let skipped = 0
 
-  for (let i = 0; i < rows.length; i += chunkSize) {
-    const chunk = rows.slice(i, i + chunkSize)
-    const { error } = await supabase.from(IOT_DATA_TABLE).insert(chunk)
+  if (dedupeByVehicleDate) {
+    const dates = [...new Set(rows.map((r) => r.run_date))]
+    const existing = await fetchExistingDedupeKeys(rows[0].data_source, dates)
+    const seen = new Set(existing)
+    toInsert = []
+
+    for (const row of rows) {
+      const key = iotRowDedupeKey(row)
+      if (!vehicleMatchKey(row.vehicle_number || row.raw_vehicle_id || '')) continue
+      if (seen.has(key)) {
+        skipped += 1
+        continue
+      }
+      seen.add(key)
+      toInsert.push(row)
+    }
+  }
+
+  let inserted = 0
+
+  for (const row of toInsert) {
+    const { error } = await supabase.from(IOT_DATA_TABLE).insert(row)
     if (error) {
       if (error.code === '23505') {
-        skipped += chunk.length
+        skipped += 1
         continue
       }
       throw error
     }
-    inserted += chunk.length
+    inserted += 1
   }
 
   return { inserted, skipped }
@@ -68,6 +98,13 @@ export async function fetchUnmatchedIotRows(limit = 100) {
   return data || []
 }
 
+/** One key per uploaded file (batch id), with legacy fallback for older rows. */
+function uploadFileKey(row) {
+  if (row.upload_batch_id) return row.upload_batch_id
+  if (!row.created_at) return null
+  return `legacy:${String(row.created_at).slice(0, 19)}`
+}
+
 /** Latest data date per source with vehicle count and upload file count for that date. */
 export async function fetchLastUploadBySource(sourceKeys) {
   const supabase = getSupabase()
@@ -88,7 +125,7 @@ export async function fetchLastUploadBySource(sourceKeys) {
 
       const { data: rowsForDate, error: rowsError } = await supabase
         .from(IOT_DATA_TABLE)
-        .select('created_at, vehicle_number, raw_vehicle_id')
+        .select('created_at, upload_batch_id, vehicle_number, raw_vehicle_id')
         .eq('data_source', dataSource)
         .eq('run_date', latestRunDate)
 
@@ -96,9 +133,9 @@ export async function fetchLastUploadBySource(sourceKeys) {
 
       const list = rowsForDate || []
       const vehicleKeys = new Set(
-        list.map((row) => (row.vehicle_number || row.raw_vehicle_id || '').trim()).filter(Boolean),
+        list.map((row) => vehicleMatchKey(row.vehicle_number || row.raw_vehicle_id || '')).filter(Boolean),
       )
-      const fileCount = new Set(list.map((row) => row.created_at).filter(Boolean)).size
+      const fileCount = new Set(list.map(uploadFileKey).filter(Boolean)).size
       const latestUpload = list.reduce((max, row) => {
         if (!row.created_at) return max
         return !max || row.created_at > max ? row.created_at : max

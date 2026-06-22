@@ -139,9 +139,9 @@ export function detectIotDataSource(headers) {
   return null
 }
 
-export function toIotDbRows(parsedRows) {
+export function toIotDbRows(parsedRows, uploadBatchId = null) {
   return (parsedRows || []).map((row) => ({
-    vehicle_number: row.vehicle_number || null,
+    vehicle_number: row.vehicle_number || row.raw_vehicle_id || null,
     run_date: row.run_date,
     total_distance: row.total_distance,
     data_source: row.data_source,
@@ -149,6 +149,7 @@ export function toIotDbRows(parsedRows) {
     vehicle_master_id: row.vehicle_master_id ?? null,
     lookup_matched: row.lookup_matched ?? false,
     lookup_match_type: row.lookup_match_type ?? null,
+    upload_batch_id: uploadBatchId,
   }))
 }
 

@@ -11,6 +11,7 @@ create table if not exists public.iot_data (
   vehicle_master_id bigint references public.vehicle_master (id),
   lookup_matched boolean not null default false,
   lookup_match_type text,
+  upload_batch_id text,
   created_at timestamptz not null default now()
 );
 
