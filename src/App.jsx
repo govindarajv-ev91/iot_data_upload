@@ -28,6 +28,7 @@ import {
 } from './lib/iotDataDb.js'
 import { isSupabaseConfigured, supabaseConfigError } from './lib/supabaseClient.js'
 import { getTemplateUrl, IOT_SOURCE_TEMPLATES, isRequiredHeader } from './lib/sourceTemplates.js'
+import { downloadUnmatchedVehicles } from './lib/downloadCsv.js'
 
 const SOURCE_META = {
   opspod_ev91: { icon: Radio, color: '#38bdf8' },
@@ -140,7 +141,25 @@ export default function App() {
       const unmatchedCount = withLookup.length - matched
 
       const { inserted, skipped } = await saveIotDataRows(dbRows, { dedupeByVehicleDate: multiFilePerDate })
-      const result = { total: withLookup.length, matched, unmatched: unmatchedCount, inserted, skipped, fileName: file.name }
+      const unmatchedRows = withLookup
+        .filter((r) => !r.lookup_matched)
+        .map((r) => ({
+          raw_vehicle_id: r.raw_vehicle_id,
+          vehicle_number: r.vehicle_number,
+          run_date: r.run_date,
+          total_distance: r.total_distance,
+          data_source: r.data_source,
+          created_at: new Date().toISOString(),
+        }))
+      const result = {
+        total: withLookup.length,
+        matched,
+        unmatched: unmatchedCount,
+        unmatchedRows,
+        inserted,
+        skipped,
+        fileName: file.name,
+      }
       setLastResult(result)
 
       let successText = `Uploaded ${file.name} — ${inserted.toLocaleString()} rows saved to iot_data.`
@@ -148,6 +167,9 @@ export default function App() {
         successText += ` ${skipped.toLocaleString()} skipped (same vehicle + date already exists).`
       } else if (skipped > 0) {
         successText += ` ${skipped.toLocaleString()} duplicate rows skipped.`
+      }
+      if (unmatchedCount > 0) {
+        successText += ` ${unmatchedCount.toLocaleString()} unmatched vehicle(s) — download available below.`
       }
       setMessage({ type: 'success', text: successText })
       await refreshDashboard()
@@ -182,6 +204,30 @@ export default function App() {
   const matchRate = lastResult
     ? Math.round((lastResult.matched / lastResult.total) * 100)
     : null
+
+  const handleDownloadUploadUnmatched = () => {
+    if (!lastResult?.unmatchedRows?.length) return
+    downloadUnmatchedVehicles(lastResult.unmatchedRows, {
+      fileNameHint: lastResult.fileName || 'upload',
+    })
+  }
+
+  const handleDownloadDbUnmatched = async () => {
+    try {
+      const rows = await fetchUnmatchedIotRows(5000)
+      if (!rows.length) {
+        setMessage({ type: 'info', text: 'No unmatched vehicles found in the database.' })
+        return
+      }
+      downloadUnmatchedVehicles(rows, { fileNameHint: 'iot_data_unmatched' })
+      setMessage({
+        type: 'success',
+        text: `Downloaded ${rows.length.toLocaleString()} unmatched vehicle row(s).`,
+      })
+    } catch (err) {
+      setMessage({ type: 'error', text: err?.message || 'Failed to download unmatched vehicles.' })
+    }
+  }
 
   return (
     <div className="app">
@@ -350,6 +396,22 @@ export default function App() {
 
           {message && <Alert type={message.type}>{message.text}</Alert>}
 
+          {lastResult?.unmatched > 0 && lastResult.unmatchedRows?.length > 0 && (
+            <div className="unmatched-download-bar">
+              <div className="unmatched-download-text">
+                <AlertCircle size={16} />
+                <span>
+                  <strong>{lastResult.unmatched.toLocaleString()}</strong> unmatched vehicle
+                  {lastResult.unmatched === 1 ? '' : 's'} in this upload — download CSV to fix in vehicle_master.
+                </span>
+              </div>
+              <button type="button" className="template-download-btn" onClick={handleDownloadUploadUnmatched}>
+                <Download size={15} />
+                Download unmatched
+              </button>
+            </div>
+          )}
+
           {preview.length > 0 && (
             <div className="preview-table-wrap">
               <h2 className="panel-title">Recent saved rows</h2>
@@ -468,6 +530,14 @@ export default function App() {
                   </li>
                 ))}
               </ul>
+              <button
+                type="button"
+                className="template-download-btn template-download-block"
+                onClick={handleDownloadDbUnmatched}
+              >
+                <Download size={15} />
+                Download all unmatched (.csv)
+              </button>
             </>
           )}
 
