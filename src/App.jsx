@@ -71,28 +71,38 @@ export default function App() {
   const [unmatched, setUnmatched] = useState([])
   const [lastUploadBySource, setLastUploadBySource] = useState({})
   const [dbReady, setDbReady] = useState(true)
+  const [dashboardError, setDashboardError] = useState(null)
   const fileRef = useRef(null)
 
   const refreshDashboard = useCallback(async () => {
     if (!isSupabaseConfigured) return
-    try {
-      const sourceKeys = Object.keys(IOT_DATA_SOURCES)
-      const [rows, badRows, lastUploads] = await Promise.all([
-        fetchIotDataPreview(12),
-        fetchUnmatchedIotRows(8),
-        fetchLastUploadBySource(sourceKeys),
-      ])
-      setPreview(rows)
-      setUnmatched(badRows)
-      setLastUploadBySource(lastUploads)
+    const sourceKeys = Object.keys(IOT_DATA_SOURCES)
+    const results = await Promise.allSettled([
+      fetchIotDataPreview(12),
+      fetchUnmatchedIotRows(8),
+      fetchLastUploadBySource(sourceKeys),
+    ])
+    const [previewResult, unmatchedResult, lastUploadsResult] = results
+    const errors = results.filter((result) => result.status === 'rejected').map((result) => result.reason)
+
+    if (previewResult.status === 'fulfilled') setPreview(previewResult.value)
+    if (unmatchedResult.status === 'fulfilled') setUnmatched(unmatchedResult.value)
+    if (lastUploadsResult.status === 'fulfilled') setLastUploadBySource(lastUploadsResult.value)
+
+    const missingTable = errors.find(isMissingIotDataTable)
+    if (missingTable) {
+      setDbReady(false)
+      setPreview([])
+      setUnmatched([])
+      setLastUploadBySource({})
+    } else {
       setDbReady(true)
-    } catch (err) {
-      if (isMissingIotDataTable(err)) {
-        setDbReady(false)
-        setPreview([])
-        setUnmatched([])
-        setLastUploadBySource({})
-      }
+    }
+
+    if (errors.length) {
+      setDashboardError(errors.map((error) => error?.message || 'Dashboard request failed.').join(' '))
+    } else {
+      setDashboardError(null)
     }
   }, [])
 
@@ -247,6 +257,10 @@ export default function App() {
 
       {!isSupabaseConfigured && (
         <Alert type="error">{supabaseConfigError}</Alert>
+      )}
+
+      {isSupabaseConfigured && dashboardError && (
+        <Alert type="error">Network error loading dashboard data: {dashboardError}</Alert>
       )}
 
       {isSupabaseConfigured && !dbReady && (
