@@ -19,7 +19,7 @@ import { attachVehicleLookup } from './lib/vehicleLookup.js'
 import { fetchAllVehicleMaster } from './lib/vehicleMasterDb.js'
 import {
   fetchIotDataPreview,
-  findExistingUploadsForDates,
+  fetchAllUnmatchedIotRows,
   fetchLastUploadBySource,
   fetchUnmatchedIotRows,
   getIotDataDbSetupMessage,
@@ -64,6 +64,7 @@ function Alert({ type, children }) {
 export default function App() {
   const [sourceKey, setSourceKey] = useState('opspod_ev91')
   const [uploading, setUploading] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [message, setMessage] = useState(null)
   const [lastResult, setLastResult] = useState(null)
@@ -73,9 +74,10 @@ export default function App() {
   const [dbReady, setDbReady] = useState(true)
   const [dashboardError, setDashboardError] = useState(null)
   const fileRef = useRef(null)
+  const uploadInProgress = useRef(false)
 
   const refreshDashboard = useCallback(async () => {
-    if (!isSupabaseConfigured) return
+    if (!isSupabaseConfigured()) return
     const sourceKeys = Object.keys(IOT_DATA_SOURCES)
     const results = await Promise.allSettled([
       fetchIotDataPreview(12),
@@ -111,8 +113,9 @@ export default function App() {
   }, [refreshDashboard])
 
   const processFile = async (file) => {
-    if (!file || uploading) return
+    if (!file || uploadInProgress.current) return
 
+    uploadInProgress.current = true
     setUploading(true)
     setMessage({ type: 'info', text: 'Reading file and resolving vehicles via vehicle_master…' })
     setLastResult(null)
@@ -125,23 +128,7 @@ export default function App() {
         return
       }
 
-      const runDates = [...new Set(parsed.map((row) => row.run_date))]
       const multiFilePerDate = allowsMultiFilePerDate(sourceKey)
-
-      if (!multiFilePerDate) {
-        const conflicts = await findExistingUploadsForDates(sourceKey, runDates)
-        if (conflicts.length) {
-          const sourceLabel = IOT_DATA_SOURCES[sourceKey].label
-          const detail = conflicts
-            .map((c) => `${c.runDate} (uploaded ${formatLastUpload(c.uploadedAt)})`)
-            .join(', ')
-          setMessage({
-            type: 'error',
-            text: `Upload blocked — ${sourceLabel} data for this date already exists: ${detail}. Same data will not be uploaded again.`,
-          })
-          return
-        }
-      }
 
       const masterRows = await fetchAllVehicleMaster()
       const withLookup = attachVehicleLookup(parsed, masterRows)
@@ -150,7 +137,7 @@ export default function App() {
       const matched = withLookup.filter((r) => r.lookup_matched).length
       const unmatchedCount = withLookup.length - matched
 
-      const { inserted, skipped } = await saveIotDataRows(dbRows, { dedupeByVehicleDate: multiFilePerDate })
+      const { inserted, skipped } = await saveIotDataRows(dbRows)
       const unmatchedRows = withLookup
         .filter((r) => !r.lookup_matched)
         .map((r) => ({
@@ -191,6 +178,7 @@ export default function App() {
         setMessage({ type: 'error', text: err?.message || 'Upload failed.' })
       }
     } finally {
+      uploadInProgress.current = false
       setUploading(false)
     }
   }
@@ -223,8 +211,10 @@ export default function App() {
   }
 
   const handleDownloadDbUnmatched = async () => {
+    if (exporting) return
+    setExporting(true)
     try {
-      const rows = await fetchUnmatchedIotRows(5000)
+      const rows = await fetchAllUnmatchedIotRows()
       if (!rows.length) {
         setMessage({ type: 'info', text: 'No unmatched vehicles found in the database.' })
         return
@@ -236,6 +226,8 @@ export default function App() {
       })
     } catch (err) {
       setMessage({ type: 'error', text: err?.message || 'Failed to download unmatched vehicles.' })
+    } finally {
+      setExporting(false)
     }
   }
 
@@ -255,17 +247,17 @@ export default function App() {
         </span>
       </header>
 
-      {!isSupabaseConfigured && (
+      {!isSupabaseConfigured() && (
         <Alert type="error">{supabaseConfigError}</Alert>
       )}
 
-      {isSupabaseConfigured && dashboardError && (
-        <Alert type="error">Network error loading dashboard data: {dashboardError}</Alert>
+      {isSupabaseConfigured() && dashboardError && (
+        <Alert type="error">Could not load dashboard data: {dashboardError}</Alert>
       )}
 
-      {isSupabaseConfigured && !dbReady && (
+      {isSupabaseConfigured() && !dbReady && (
         <Alert type="error">
-          iot_data table not found. Run <strong>sql/create_iot_data_table.sql</strong> in Supabase SQL Editor first.
+          {getIotDataDbSetupMessage()}
         </Alert>
       )}
 
@@ -548,9 +540,10 @@ export default function App() {
                 type="button"
                 className="template-download-btn template-download-block"
                 onClick={handleDownloadDbUnmatched}
+                disabled={exporting}
               >
                 <Download size={15} />
-                Download all unmatched (.csv)
+                {exporting ? 'Preparing CSV…' : 'Download all unmatched (.csv)'}
               </button>
             </>
           )}

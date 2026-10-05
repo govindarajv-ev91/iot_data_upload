@@ -7,8 +7,13 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "test": "npm run test:lookup && npm run test:dates && npm run test:parse && npm run test:regressions && npm run test:upload",
     "test:lookup": "node scripts/test-vehicle-lookup.mjs",
-    "test:dates": "node scripts/test-date-parse.mjs"
+    "test:dates": "node scripts/test-date-parse.mjs",
+    "test:parse": "node scripts/test-iot-parse.mjs",
+    "test:regressions": "node scripts/test-iot-regressions.mjs",
+    "test:upload": "node scripts/test-upload-db.mjs",
+    "test:sql": "node scripts/test-upload-sql.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.102.1",

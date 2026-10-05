@@ -2,8 +2,8 @@ import { format } from 'date-fns'
 
 const MIN_YEAR = 2000
 const MAX_YEAR = 2100
-const EXCEL_SERIAL_MIN = 30000
-const EXCEL_SERIAL_MAX = 65000
+const EXCEL_SERIAL_MIN = Date.UTC(MIN_YEAR, 0, 1) / 86400000 + 25569
+const EXCEL_SERIAL_MAX = Date.UTC(MAX_YEAR, 11, 31) / 86400000 + 25569
 
 export function normalizeHeader(value) {
   return String(value ?? '')
@@ -64,8 +64,9 @@ function parseYmdCompact(value) {
   return localDateFromParts(year, month, day)
 }
 
-function parseExcelSerial(value) {
-  const serial = Math.round(Number(value))
+function parseExcelSerial(value, date1904 = false) {
+  // The fraction is the time of day, not a reason to advance the calendar date.
+  const serial = Math.floor(Number(value)) + (date1904 ? 1462 : 0)
   if (!Number.isFinite(serial) || serial < EXCEL_SERIAL_MIN || serial > EXCEL_SERIAL_MAX) return null
 
   const utc = new Date((serial - 25569) * 86400 * 1000)
@@ -100,7 +101,7 @@ function parseSlashDate(a, b, yearRaw) {
   return localDateFromParts(year, month, day)
 }
 
-export function parseFleetDate(dateStr) {
+export function parseFleetDate(dateStr, { date1904 = false } = {}) {
   if (dateStr == null || dateStr === '') return null
 
   if (dateStr instanceof Date && !Number.isNaN(dateStr.getTime())) {
@@ -111,7 +112,7 @@ export function parseFleetDate(dateStr) {
   }
 
   if (typeof dateStr === 'number' && Number.isFinite(dateStr)) {
-    return parseYmdCompact(dateStr) || parseExcelSerial(dateStr)
+    return parseYmdCompact(dateStr) || parseExcelSerial(dateStr, date1904)
   }
 
   const s = String(dateStr).trim()
@@ -137,7 +138,7 @@ export function parseFleetDate(dateStr) {
 
   // Excel serial as string (46191 or 46191.0)
   if (/^\d{4,6}(\.\d+)?$/.test(s)) {
-    const fromSerial = parseExcelSerial(parseFloat(s))
+    const fromSerial = parseExcelSerial(parseFloat(s), date1904)
     if (fromSerial) return fromSerial
   }
 
