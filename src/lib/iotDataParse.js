@@ -56,14 +56,30 @@ function buildRowsFromSheet(sheet, sourceKey) {
   if (!ref) return []
 
   const range = XLSX.utils.decode_range(ref)
+  const config = IOT_DATA_SOURCES[sourceKey]
+  const headerRow = Array.from(
+    { length: Math.min(range.e.r - range.s.r + 1, 31) },
+    (_, offset) => range.s.r + offset,
+  ).find((r) => {
+    const normalizedHeaders = new Set()
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const addr = XLSX.utils.encode_cell({ r, c })
+      const normalized = normalizeRowKeys({ [readCellValue(sheet[addr])]: true })
+      normalizedHeaders.add(Object.keys(normalized)[0])
+    }
+    return [config.vehicle, config.date, config.distance].every((aliases) =>
+      aliases.some((alias) => normalizedHeaders.has(alias)),
+    )
+  }) ?? range.s.r
+
   const headers = []
   for (let c = range.s.c; c <= range.e.c; c++) {
-    const addr = XLSX.utils.encode_cell({ r: range.s.r, c })
+    const addr = XLSX.utils.encode_cell({ r: headerRow, c })
     headers[c] = String(readCellValue(sheet[addr])).replace(/^\uFEFF/, '').trim()
   }
 
   const rows = []
-  for (let r = range.s.r + 1; r <= range.e.r; r++) {
+  for (let r = headerRow + 1; r <= range.e.r; r++) {
     const row = {}
     for (let c = range.s.c; c <= range.e.c; c++) {
       const header = headers[c]

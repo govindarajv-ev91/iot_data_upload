@@ -29,5 +29,19 @@ const wbOk = rows.length === 1 && rows[0].run_date === '2026-06-18'
 console.log(`${wbOk ? 'OK' : 'FAIL'} workbook Date object ->`, rows[0]?.run_date || 'NO ROWS')
 if (wbOk) passed += 1
 
-console.log(`\n${passed}/${rowCases.length + 1} passed`)
-process.exit(passed === rowCases.length + 1 ? 0 : 1)
+const preambleSheet = XLSX.utils.aoa_to_sheet([
+  ['Opspod EV91 daily export'],
+  ['Generated on', '2026-06-19'],
+  ['Object', 'Date', 'Total Distance'],
+  ['TN22EB2009', '2026-06-18', 120],
+])
+const preambleWorkbook = XLSX.utils.book_new()
+XLSX.utils.book_append_sheet(preambleWorkbook, preambleSheet, 'Report')
+const preambleBuffer = XLSX.write(preambleWorkbook, { type: 'array', bookType: 'xlsx' })
+const preambleRows = parseIotWorkbookArrayBuffer(preambleBuffer, 'opspod_ev91').rows
+const preambleOk = preambleRows.length === 1 && preambleRows[0].run_date === '2026-06-18'
+console.log(`${preambleOk ? 'OK' : 'FAIL'} Opspod header after preamble ->`, preambleRows[0]?.run_date || 'NO ROWS')
+if (preambleOk) passed += 1
+
+console.log(`\n${passed}/${rowCases.length + 2} passed`)
+process.exit(passed === rowCases.length + 2 ? 0 : 1)

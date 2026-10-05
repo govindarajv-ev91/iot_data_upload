@@ -60,16 +60,23 @@ export async function saveIotDataRows(rows, { dedupeByVehicleDate = false } = {}
 
   let inserted = 0
 
-  for (const row of toInsert) {
-    const { error } = await supabase.from(IOT_DATA_TABLE).insert(row)
-    if (error) {
-      if (error.code === '23505') {
-        skipped += 1
-        continue
-      }
-      throw error
+  const batchSize = 500
+  for (let offset = 0; offset < toInsert.length; offset += batchSize) {
+    const batch = toInsert.slice(offset, offset + batchSize)
+    const { error } = await supabase.from(IOT_DATA_TABLE).insert(batch)
+    if (!error) {
+      inserted += batch.length
+      continue
     }
-    inserted += 1
+
+    if (error.code !== '23505') throw error
+
+    for (const row of batch) {
+      const { error: rowError } = await supabase.from(IOT_DATA_TABLE).insert(row)
+      if (rowError?.code === '23505') skipped += 1
+      else if (rowError) throw rowError
+      else inserted += 1
+    }
   }
 
   return { inserted, skipped }
@@ -109,51 +116,21 @@ function uploadFileKey(row) {
 export async function fetchLastUploadBySource(sourceKeys) {
   const supabase = getSupabase()
   const keys = sourceKeys || []
+  if (!keys.length) return {}
 
-  const entries = await Promise.all(
-    keys.map(async (dataSource) => {
-      const { data: latestRows, error: latestError } = await supabase
-        .from(IOT_DATA_TABLE)
-        .select('run_date')
-        .eq('data_source', dataSource)
-        .order('run_date', { ascending: false })
-        .limit(1)
+  const { data, error } = await supabase.rpc('iot_dashboard_last_uploads', { source_keys: keys })
+  if (error) throw error
 
-      if (latestError) throw latestError
-      const latestRunDate = latestRows?.[0]?.run_date
-      if (!latestRunDate) return [dataSource, null]
-
-      const { data: rowsForDate, error: rowsError } = await supabase
-        .from(IOT_DATA_TABLE)
-        .select('created_at, upload_batch_id, vehicle_number, raw_vehicle_id')
-        .eq('data_source', dataSource)
-        .eq('run_date', latestRunDate)
-
-      if (rowsError) throw rowsError
-
-      const list = rowsForDate || []
-      const vehicleKeys = new Set(
-        list.map((row) => vehicleMatchKey(row.vehicle_number || row.raw_vehicle_id || '')).filter(Boolean),
-      )
-      const fileCount = new Set(list.map(uploadFileKey).filter(Boolean)).size
-      const latestUpload = list.reduce((max, row) => {
-        if (!row.created_at) return max
-        return !max || row.created_at > max ? row.created_at : max
-      }, null)
-
-      return [
-        dataSource,
-        {
-          runDate: latestRunDate,
-          createdAt: latestUpload,
-          vehicleCount: vehicleKeys.size,
-          fileCount,
-        },
-      ]
-    }),
-  )
-
-  return Object.fromEntries(entries)
+  const results = Object.fromEntries(keys.map((key) => [key, null]))
+  for (const row of data || []) {
+    results[row.data_source] = {
+      runDate: row.run_date,
+      createdAt: row.created_at,
+      vehicleCount: Number(row.vehicle_count),
+      fileCount: Number(row.file_count),
+    }
+  }
+  return results
 }
 
 /** Returns run_dates that already have data for this source (with last upload time). */
