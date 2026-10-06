@@ -17,6 +17,7 @@ export const IOT_DATA_SOURCES = {
     distance: ['total_distance'],
     secondary: [],
     multiFilePerDate: true,
+    missingDistanceAsZero: true,
   },
   alt_mobility: {
     label: 'Alt Mobility',
@@ -31,6 +32,7 @@ export const IOT_DATA_SOURCES = {
     date: ['date'],
     distance: ['distance_km'],
     secondary: ['chassis_no'],
+    missingDistanceAsZero: true,
   },
   Recent_Details: {
     label: 'vehicle_day_report (Motvolt)',
@@ -112,12 +114,21 @@ function mapIotRow(normalized, sourceKey, config, options) {
   const dateRaw = pickField(normalized, config.date)
   const runDateParsed = parseFleetDate(dateRaw, options)
   const runDate = formatRunDate(runDateParsed)
-  const totalDistance = toNumber(pickField(normalized, config.distance))
+  const distanceRaw = pickField(normalized, config.distance)
+  const parsedDistance = toNumber(distanceRaw)
+  const totalDistance = config.missingDistanceAsZero && !toText(distanceRaw)
+    ? 0
+    : parsedDistance !== null && parsedDistance < 0
+      ? 0
+      : parsedDistance
 
   const errors = []
   if (!rawVehicle && !secondaryIds.length) errors.push('missing vehicle identifier')
   if (!runDate) errors.push('missing or invalid date')
-  if (totalDistance === null || totalDistance < 0) errors.push('distance must be a number greater than or equal to zero')
+  if (totalDistance === null || totalDistance < 0) {
+    const receivedDistance = toText(distanceRaw).replace(/\s+/g, ' ').slice(0, 40) || '(blank)'
+    errors.push(`distance must be a number greater than or equal to zero (received ${JSON.stringify(receivedDistance)})`)
+  }
   if (errors.length) return { errors }
 
   return { row: {

@@ -49,9 +49,50 @@ await test('a missing required distance column rejects the file', () => {
   assert.throws(() => csvRows('reg_no,Total Distance Date\nTN22EB2009,2026-06-18', 'alt_mobility'), /Missing required columns.*total_distance/i)
 })
 
-await test('missing, nonnumeric, negative and infinite distances reject the file', () => {
-  for (const distance of ['', 'not_a_number', '-1', 'Infinity']) {
+await test('nonnumeric and infinite distances reject the file', () => {
+  for (const distance of ['not_a_number', 'Infinity']) {
     assert.throws(() => csvRows(`Object,Date,Total Distance\nTN22EB2009,2026-06-18,${distance}`), /Row 2:.*distance.*No rows were uploaded/)
+  }
+})
+
+await test('invalid distance errors include the received cell value', () => {
+  assert.throws(() => csvRows('Object,Date,Total Distance\nTN22EB2009,2026-06-18,N/A'), /Row 2:.*received "N\/A"/)
+})
+
+await test('blank distances remain invalid for sources without blank-distance support', () => {
+  assert.throws(() => parseIotWorkbookRows([
+    { reg_no: 'TN22EB2091', 'Total Distance Date': '2026-06-18', total_distance: '' },
+  ], 'alt_mobility'), /Row 2:.*distance.*No rows were uploaded/)
+})
+
+await test('downloaded distance values with kilometer units are accepted', () => {
+  const rows = csvRows('Object,Date,Total Distance\nTN22EB2009,2026-06-18,"1,250 km"\nTN22EB2091,2026-06-19,42.5 kms')
+  assert.deepEqual(rows.map((row) => row.total_distance), [1250, 42.5])
+})
+
+await test('blank Stridegreen distances are treated as zero', () => {
+  const rows = parseIotWorkbookRows([
+    { 'Vehicle No': 'TN22EB2091', Date: '2026-06-18', 'Distance (km)': '' },
+  ], 'vehicle_day_report')
+  assert.equal(rows[0].total_distance, 0)
+})
+
+await test('blank Opspod distances are treated as zero', () => {
+  const rows = parseIotWorkbookRows([
+    { Object: 'TN22EB2091', Date: '2026-06-18', 'Total Distance': '' },
+  ], 'opspod_ev91')
+  assert.equal(rows[0].total_distance, 0)
+})
+
+await test('negative distances are treated as zero for every source', () => {
+  const cases = [
+    ['opspod_ev91', { Object: 'TN22EB2091', Date: '2026-06-18', 'Total Distance': -1 }],
+    ['alt_mobility', { reg_no: 'TN22EB2091', 'Total Distance Date': '2026-06-18', total_distance: '-2.5' }],
+    ['vehicle_day_report', { 'Vehicle No': 'TN22EB2091', Date: '2026-06-18', 'Distance (km)': -3 }],
+    ['Recent_Details', { 'Reg No': 'TN22EB2091', 'Report Date': '2026-06-18', Distance: '-4' }],
+  ]
+  for (const [source, row] of cases) {
+    assert.equal(parseIotWorkbookRows([row], source)[0].total_distance, 0)
   }
 })
 

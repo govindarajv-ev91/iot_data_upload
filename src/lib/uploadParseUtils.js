@@ -38,7 +38,7 @@ export function toText(value) {
 export function toNumber(value) {
   if (value === null || value === undefined || value === '') return null
   if (typeof value === 'number' && Number.isFinite(value)) return value
-  let s = String(value).replace(/[₹,\s]/g, '').trim()
+  let s = String(value).trim().replace(/\s*(?:km|kms|kilometers?)$/i, '').replace(/[₹,\s]/g, '')
   if (!s || s === '-' || s === '—' || s === '–') return null
   if (s.startsWith('(') && s.endsWith(')')) s = `-${s.slice(1, -1)}`
   const n = Number(s)

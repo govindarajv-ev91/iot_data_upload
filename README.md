@@ -22,7 +22,7 @@ Configure `public/config.json` using `public/config.example.json`, or provide `V
 
 ## Upload validation
 
-Use the supplied templates. A vehicle identifier, valid date, and finite distance greater than or equal to zero are required. Completely blank rows are ignored. Any other invalid row rejects the whole file and reports its worksheet row number; valid rows are not saved separately.
+Use the supplied templates. A vehicle identifier and valid date are required. Finite negative distances are treated as zero. Blank distances are also treated as zero for Opspod and Stridegreen; other sources require a distance value. Nonnumeric or infinite distances reject the whole file and report the worksheet row number. Completely blank rows are ignored, and valid rows are not saved separately when any row is invalid.
 
 ISO dates such as `2026-06-05` are recommended for CSV files. Ambiguous slash dates are interpreted as day/month/year. Native Excel dates retain their calendar date regardless of display formatting or browser timezone, including workbooks using the 1904 date system.
 
